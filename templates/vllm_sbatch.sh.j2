@@ -1,0 +1,51 @@
+#!/bin/bash
+#SBATCH --job-name=vllm-serve
+#SBATCH --account={{ slurm_account }}
+#SBATCH --partition={{ partition }}
+#SBATCH --time={{ walltime }}
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task={{ cpus_per_task }}
+#SBATCH --mem={{ mem }}
+#SBATCH --gpus-per-node={{ gpus_per_node }}
+{% for line in extra_sbatch %}
+#SBATCH {{ line }}
+{% endfor %}
+#SBATCH --output=slurm-%j.out
+#SBATCH --error=slurm-%j.err
+
+set -euo pipefail
+cd "${SLURM_SUBMIT_DIR}"
+
+# Compute nodes often have no outbound internet — do not run pip here.
+# All wheels and HF weights must be installed under this directory on the login node.
+module load {{ python_module }}
+{% for mod in extra_compute_modules %}
+module load {{ mod }}
+{% endfor %}
+
+source "${SLURM_SUBMIT_DIR}/venv/bin/activate"
+
+export HF_HOME="${SLURM_SUBMIT_DIR}/hf_home"
+# GPU nodes usually have no route to huggingface.co — forbid hub HTTP so failures are local/offline.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+echo "NODE: $(hostname -f)" | tee -a vllm_node_info.txt
+echo "PORT: {{ server_port }}" | tee -a vllm_node_info.txt
+echo "MODEL: {{ model }}" | tee -a vllm_node_info.txt
+
+# Set model path in separate statements so Jinja control lines never insert a blank line
+# between a trailing '\' and the next argument (bash would end the continued command there).
+{% if hf_weights_home_rel %}
+MODEL_PATH="${HOME}/{{ hf_weights_home_rel }}"
+{% else %}
+MODEL_PATH={{ model | tojson }}
+{% endif %}
+
+exec python -m vllm.entrypoints.openai.api_server \
+  --host 0.0.0.0 \
+  --port {{ server_port }} \
+  --model "${MODEL_PATH}" \
+  --dtype auto{% for a in extra_vllm_cli %} {{ a }}{% endfor %}
+

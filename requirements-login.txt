@@ -1,0 +1,4 @@
+# Login node only: pre-download HF weights using Alliance wheels (see README).
+# Installed with: pip install --no-index -r requirements-login.txt
+# Do not add vllm here — full vLLM belongs on GPU nodes only (requirements-vllm.txt in the job).
+huggingface_hub

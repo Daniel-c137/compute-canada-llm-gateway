@@ -1,0 +1,17 @@
+# Satisfies pip metadata for `opencv-python-headless` on Alliance / Compute Canada clusters
+# where the wheel index serves `opencv-noinstall` instead. Real `cv2` comes from `module load opencv`.
+# Bump `version` if vLLM raises its lower bound (see vllm `requirements/common.txt`).
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opencv-python-headless"
+version = "4.13.0.92"
+description = "Distribution metadata shim; do not use on systems where pip can install real opencv-python-headless."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["opencv_python_headless_stub_meta*"]

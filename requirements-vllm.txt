@@ -1,0 +1,5 @@
+# Login: pip install --no-index -r requirements-vllm.txt
+# (cc_submit_vllm.py uses venv/bin/python -m pip and --no-build-isolation when YAML lists OpenCV — Alliance.)
+# vLLM depends on opencv-python-headless; upstream optional-extra discussion: https://github.com/vllm-project/vllm/issues/40741
+# Use cluster wheel houses where applicable; avoid PyPI on nodes without outbound internet.
+vllm>=0.4.0
