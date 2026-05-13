@@ -1,6 +1,29 @@
 # cc-llm-gateway
 
-Deploy a **vLLM** OpenAI-compatible server on [Alliance / Compute Canada](https://docs.alliancecan.ca/) (SLURM), then run a **Python gateway** on your VM that:
+## Architecture
+
+Your **laptop or a small VM** runs an SSH **local forward** (for example `-L 8000:gpu-node:8000` through the login host) so that `127.0.0.1:8000` on that machine reaches **vLLM on the GPU compute node**. The **gateway** listens on a separate port (for example `0.0.0.0:8080`), checks a **Bearer token**, and forwards HTTP to that local tunnel endpoint. Clients therefore talk to the gateway over the VM’s network; only SSH carries traffic into the cluster—vLLM is not meant to be opened directly to the public internet.
+
+```mermaid
+flowchart LR
+  subgraph client["Your laptop or VM"]
+    App[App or browser]
+    GW[Gateway :8080 Bearer token]
+    LO[127.0.0.1 :8000 tunnel]
+    App --> GW
+    GW --> LO
+  end
+  subgraph alliance["Alliance Canada"]
+    LOGIN[Login node SSH]
+    GPU[GPU node vLLM :8000]
+    LOGIN --> GPU
+  end
+  LO -. SSH port forward .-> LOGIN
+```
+
+> **Disclaimer.** This repository is shared **only to make research and teaching workflows easier** on national HPC systems. It is **not for commercial use** as a product or service offering, carries **no warranty** (fitness, security, or availability), and is **not affiliated with** the Alliance, Compute Canada, vLLM, or any vendor. You remain responsible for **cluster policies**, **accounting and allocation rules**, **data protection**, and how you expose network services. Do not treat this as production infrastructure, compliance guidance, or a substitute for official documentation and support from your institution or the Alliance.
+
+Deploy a **vLLM** OpenAI-compatible server on [Alliance / Compute Canada](https://docs.alliancecan.ca/) (SLURM), then run the **Python gateway** on your VM so that it:
 
 - SSH **local forwards** the compute node’s vLLM port to `127.0.0.1` on the VM (not meant to be exposed publicly).
 - Listens on **`0.0.0.0:proxy-port`** with **Bearer token** authentication for API traffic.
