@@ -30,6 +30,8 @@ Deploy a **vLLM** OpenAI-compatible server on [Alliance / Compute Canada](https:
 - Proxies **OpenAI**-style `POST /v1/chat/completions` (including `stream: true` SSE).
 - Adapts **Anthropic**-style `POST /v1/messages` to the upstream OpenAI API (non-streaming only in v0.1).
 
+**Sample demonstration:** [short walkthrough video (Google Drive)](https://drive.google.com/file/d/1ONu7hOPw5cgjRhXlI14QpIF_6pqR_3Dg/view?usp=sharing).
+
 Swagger UI: **`http://<vm-ip>:<proxy-port>/docs`**  
 OpenAPI JSON: **`http://<vm-ip>:<proxy-port>/openapi.json`**  
 ReDoc: **`http://<vm-ip>:<proxy-port>/redoc`**
