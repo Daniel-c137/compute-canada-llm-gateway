@@ -106,7 +106,7 @@ python scripts/cc_submit_vllm.py --config config/nodes.yaml
 Non-interactive example:
 
 ```bash
-export HF_TOKEN=hf_…   # only if the Hub repo is gated — see [FAQ](#faq)
+export HF_TOKEN=hf_…   # only if the Hub repo is gated
 python scripts/cc_submit_vllm.py --config config/nodes.yaml \
   --non-interactive --preset rorqual_h100_full_1 \
   --model meta-llama/Llama-3.2-1B-Instruct --port 8000 --walltime 4:00:00
@@ -187,12 +187,6 @@ Edit [`templates/vllm_sbatch.sh.j2`](templates/vllm_sbatch.sh.j2) for Apptainer,
 
 ---
 
-## macOS / Linux
-
-POSIX shell on the cluster; `ssh` / `scp` via stdlib `subprocess` (no Windows path in this repo). Tests: `pytest -q` after `pip install -e ".[dev]"`.
-
----
-
 ## Limitations (v0.1)
 
 - `/v1/messages` **streaming** is not supported; use `/v1/chat/completions` with `stream: true`.
@@ -204,8 +198,6 @@ POSIX shell on the cluster; `ssh` / `scp` via stdlib `subprocess` (no Windows pa
 ---
 
 ## FAQ
-
-Collapsed sections use GitHub’s `<details>` / `<summary>` pattern ([organizing information with collapsed sections](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/organizing-information-with-collapsed-sections)). Jump to: [gated models](#faq-gated) · [every run?](#faq-every-run) · [pull errors](#faq-pull-errors) · [different Hub / offline](#faq-different-hub) · [MIG](#faq-mig).
 
 <a id="faq-gated"></a>
 
