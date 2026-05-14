@@ -253,29 +253,6 @@ Broken remote **`venv`**: **`--fresh-venv`** or delete `…/venv` on the cluster
 
 ---
 
-<a id="faq-different-hub"></a>
-
-### vLLM shows a different Hub repo, or `LocalEntryNotFoundError` offline
-
-<details>
-  <summary><strong>Bash <code>\</code> continuation vs <code>speculators_config</code></strong></summary>
-
-**A) Bash line continuation (fixed in current template)**  
-If **`slurm-*.out`** shows **`non-default args: {'host': '0.0.0.0'}`** only, **`--model` may never have reached Python**: a **blank line** between a line ending in `\` and the next argument ends the continued command in bash, so vLLM fell back to its **default** model (e.g. `Qwen/Qwen3-0.6B` in vLLM 0.20.x). Use a current [`templates/vllm_sbatch.sh.j2`](templates/vllm_sbatch.sh.j2) (uses `MODEL_PATH` + no blank line inside `exec … \` continuations) or remove blank lines in `vllm_job.sh`.
-
-**B) Speculators / verifier on disk**  
-If the banner or errors reference **another** Hub id while your **`--model`** path is correct, **`config.json`** under that path may include **`speculators_config`** pointing at a verifier on Hugging Face. With **`HF_HUB_OFFLINE=1`** on compute, that becomes **`LocalEntryNotFoundError`**. On the login node:
-
-```bash
-grep -n speculators_config "$HOME/<your-weights-dir>/config.json" || true
-```
-
-Re-download a clean snapshot or use weights without that block. Official model cards usually match the upstream `config.json` on Hugging Face.
-
-</details>
-
----
-
 <a id="faq-mig"></a>
 
 ### vLLM on Slurm MIG: `invalid literal for int() … 'MIG-…'`

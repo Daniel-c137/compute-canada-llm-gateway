@@ -19,12 +19,14 @@ if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import argparse
+import itertools
 import json
 import os
 import re
 import shlex
 import stat
 import subprocess
+import threading
 import uuid
 from typing import Any
 
@@ -38,6 +40,34 @@ REQ_LOGIN = REPO_ROOT / "requirements-login.txt"
 REQ_VLLM = REPO_ROOT / "requirements-vllm.txt"
 # Local metadata distribution so pip does not fetch Alliance `opencv-noinstall` for vLLM.
 OPENCV_HEADLESS_STUB = REPO_ROOT / "packaging" / "opencv_python_headless_stub"
+
+
+class TtyWaitSpinner:
+    """Rotating indicator on stderr while a blocking step (SSH) runs."""
+
+    def __init__(self, message: str, *, interval_s: float = 0.12) -> None:
+        self._message = message.rstrip()
+        self._interval_s = interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> TtyWaitSpinner:
+        self._thread = threading.Thread(target=self._spin, name="cc-submit-wait", daemon=True)
+        self._thread.start()
+        return self
+
+    def _spin(self) -> None:
+        frames = itertools.cycle("|/-\\")
+        prefix = f"{self._message} "
+        while not self._stop.wait(self._interval_s):
+            print(f"\r{prefix}{next(frames)} ", end="", file=sys.stderr, flush=True)
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+        pad = max(len(self._message) + 4, 12)
+        print("\r" + " " * pad + "\r", end="", file=sys.stderr, flush=True)
 
 
 def resolve_control_socket(cli_value: str | None, cfg: dict[str, Any] | None = None) -> str | None:
@@ -498,11 +528,12 @@ def main() -> None:
     local_sh = REPO_ROOT / f".vllm_job_{run_id}.sh"
     local_sh.write_text(sbatch_body, encoding="utf-8")
     try:
-        scp_to_remote(host, user, identity, control_socket, REQ_LOGIN, f"{run_rel}/requirements-login.txt")
-        scp_to_remote(host, user, identity, control_socket, REQ_VLLM, f"{run_rel}/requirements-vllm.txt")
-        scp_to_remote(host, user, identity, control_socket, local_sh, f"{run_rel}/vllm_job.sh")
-        if alliance_opencv:
-            scp_dir_to_remote(host, user, identity, control_socket, OPENCV_HEADLESS_STUB, run_rel)
+        with TtyWaitSpinner("Uploading files to the login node — please wait"):
+            scp_to_remote(host, user, identity, control_socket, REQ_LOGIN, f"{run_rel}/requirements-login.txt")
+            scp_to_remote(host, user, identity, control_socket, REQ_VLLM, f"{run_rel}/requirements-vllm.txt")
+            scp_to_remote(host, user, identity, control_socket, local_sh, f"{run_rel}/vllm_job.sh")
+            if alliance_opencv:
+                scp_dir_to_remote(host, user, identity, control_socket, OPENCV_HEADLESS_STUB, run_rel)
     finally:
         local_sh.unlink(missing_ok=True)
 
@@ -539,7 +570,10 @@ def main() -> None:
         )
     setup_parts.append(vllm_pip)
     remote_setup = " && ".join(setup_parts)
-    run_remote(host, user, identity, control_socket, remote_setup)
+    with TtyWaitSpinner(
+        "Remote setup: modules, venv, and pip install on the login node — can take several minutes; keep this terminal open"
+    ):
+        run_remote(host, user, identity, control_socket, remote_setup)
 
     if not args.skip_download:
         hf_tok = resolve_hf_token(cfg)
@@ -579,7 +613,10 @@ PY"""
         )
         dl = " && ".join(dl_parts)
         try:
-            run_remote(host, user, identity, control_socket, dl)
+            with TtyWaitSpinner(
+                "Downloading model weights on the login node (Hugging Face) — large repos take a while; do not interrupt"
+            ):
+                run_remote(host, user, identity, control_socket, dl)
         except subprocess.CalledProcessError:
             if args.ignore_hf_download_errors:
                 print(

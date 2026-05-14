@@ -17,11 +17,13 @@ if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import argparse
+import itertools
 import os
 import signal
 import socket
 import stat
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -206,17 +208,39 @@ def pick_job_interactive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return rows[idx]
 
 
-def wait_for_tcp(host: str, port: int, timeout_s: float) -> None:
+def wait_for_tcp(
+    host: str,
+    port: int,
+    timeout_s: float,
+    *,
+    spinner_message: str = "Waiting for the SSH tunnel and vLLM port — the SLURM job may still be queued or starting on the GPU node; keep this window open",
+) -> None:
+    stop = threading.Event()
+
+    def spin() -> None:
+        frames = itertools.cycle("|/-\\")
+        prefix = f"{spinner_message} "
+        while not stop.wait(0.12):
+            print(f"\r{prefix}{next(frames)} ", end="", file=sys.stderr, flush=True)
+
+    t = threading.Thread(target=spin, name="gateway-tcp-wait", daemon=True)
+    t.start()
     deadline = time.monotonic() + timeout_s
     last_err: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return
-        except OSError as e:
-            last_err = e
-            time.sleep(0.2)
-    raise TimeoutError(f"Could not connect to {host}:{port} within {timeout_s}s: {last_err}")
+    try:
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=1.0):
+                    return
+            except OSError as e:
+                last_err = e
+                time.sleep(0.2)
+        raise TimeoutError(f"Could not connect to {host}:{port} within {timeout_s}s: {last_err}")
+    finally:
+        stop.set()
+        t.join(timeout=2.0)
+        pad = max(len(spinner_message) + 4, 12)
+        print("\r" + " " * pad + "\r", end="", file=sys.stderr, flush=True)
 
 
 def parse_compute_host(nodelist: str) -> str:
@@ -346,6 +370,7 @@ def main() -> None:
         print(str(e), file=sys.stderr)
         cleanup()
         sys.exit(1)
+    print("Forwarded port is accepting connections; starting gateway.", file=sys.stderr)
 
     os.environ["UPSTREAM_BASE_URL"] = f"http://127.0.0.1:{args.forwarded_port}"
     if not os.environ.get("GATEWAY_TOKEN"):
