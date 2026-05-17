@@ -22,7 +22,7 @@ python_module: "python/3.11"
 # extra_vllm_cli:
 #   - "--trust-remote-code"
 remote_subdir: "cc-llm-runs"
-# Optional: Hugging Face snapshot dir under $HOME — same repo id reuses the same folder across runs.
+# Shared HF weights under /project/<slurm_account>/<ssh_user>/ (default subdir cc-llm-hf-weights).
 # hf_hub_weights_parent: "cc-llm-hf-weights"
 
 presets:

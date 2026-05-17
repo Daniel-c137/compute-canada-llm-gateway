@@ -31,6 +31,7 @@ import uuid
 from typing import Any
 
 import yaml
+from cc_llm_gateway.alliance_paths import hf_shared_weights_dir
 from jinja2 import Environment, FileSystemLoader
 
 
@@ -312,27 +313,10 @@ def remote_venv_pip(pip_cli_args: str, *, alliance_opencv: bool) -> str:
     return f"{VENV_PY_SH} -m pip {pip_cli_args}"
 
 
-def hf_shared_weights_home_rel(cfg: dict[str, Any], model: str) -> str | None:
-    """If ``hf_hub_weights_parent`` is set and ``model`` is a Hugging Face repo id, return ``parent/<slug>`` under $HOME."""
-    raw = cfg.get("hf_hub_weights_parent")
-    if not raw or not str(raw).strip():
-        return None
-    m = model.strip()
-    if not m or m.startswith(("/", "~", "$")):
-        return None
-    if "/" not in m:
-        return None
-    parent = str(raw).strip().strip("/").replace("..", "")
-    if not parent:
-        return None
-    slug = m.replace("/", "--").replace("..", "_")
-    return f"{parent}/{slug}"
-
-
-def remote_speculators_preflight(cd_home_then_run: str, hf_weights_rel: str | None) -> str:
+def remote_speculators_preflight(cd_home_then_run: str, hf_weights_dir: str | None) -> str:
     """SSH fragment: fail before sbatch if config.json uses speculators with a Hub-only verifier (offline compute)."""
-    if hf_weights_rel:
-        path_init = f"cfg_path = pathlib.Path.home() / pathlib.Path({json.dumps(hf_weights_rel)}) / 'config.json'"
+    if hf_weights_dir:
+        path_init = f"cfg_path = pathlib.Path({json.dumps(hf_weights_dir)}) / 'config.json'"
     else:
         path_init = "cfg_path = pathlib.Path('hf_model_cache') / 'config.json'"
     py = f"""import json
@@ -386,7 +370,7 @@ def render_sbatch(
     walltime: str,
     server_port: int,
     model: str,
-    hf_weights_home_rel: str | None = None,
+    hf_weights_dir: str | None = None,
 ) -> str:
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=False)
     tpl = env.get_template("vllm_sbatch.sh.j2")
@@ -406,7 +390,7 @@ def render_sbatch(
         python_module=cfg.get("python_module", "python/3.11"),
         server_port=server_port,
         model=model,
-        hf_weights_home_rel=hf_weights_home_rel,
+        hf_weights_dir=hf_weights_dir,
     )
 
 
@@ -436,7 +420,7 @@ def main() -> None:
         "--skip-download",
         action="store_true",
         help="Skip huggingface_hub snapshot_download. Weights must already exist (per-run hf_model_cache/ or shared "
-        "$HOME/<hf_hub_weights_parent>/… when that config key is set).",
+        "/project/<slurm_account>/<ssh_user>/<hf_hub_weights_parent>/…).",
     )
     ap.add_argument(
         "--ignore-hf-download-errors",
@@ -515,15 +499,24 @@ def main() -> None:
         )
         sys.exit(1)
 
-    hf_weights_rel = hf_shared_weights_home_rel(cfg, args.model)
-    if hf_weights_rel:
+    hf_weights_dir = hf_shared_weights_dir(cfg, user, args.model)
+    if hf_weights_dir:
         print(
-            f"HF weights reuse: snapshot and vLLM will use ~/{hf_weights_rel} (set hf_hub_weights_parent to change).\n",
+            f"HF weights reuse: snapshot and vLLM will use {hf_weights_dir} "
+            "(set hf_hub_weights_parent to change the subdirectory name).\n",
             file=sys.stderr,
+        )
+        weights_parent = str(Path(hf_weights_dir).parent)
+        run_remote(
+            host,
+            user,
+            identity,
+            control_socket,
+            f"mkdir -p {shlex.quote(weights_parent)}",
         )
 
     sbatch_body = render_sbatch(
-        cfg, preset, args.walltime, args.port, args.model, hf_weights_home_rel=hf_weights_rel
+        cfg, preset, args.walltime, args.port, args.model, hf_weights_dir=hf_weights_dir
     )
     local_sh = REPO_ROOT / f".vllm_job_{run_id}.sh"
     local_sh.write_text(sbatch_body, encoding="utf-8")
@@ -589,9 +582,9 @@ import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 repo = os.environ["HF_MODEL_ID"]
-rel = os.environ.get("HF_WEIGHTS_HOME_REL", "").strip()
-if rel:
-    dest = Path.home() / rel
+dest_dir = os.environ.get("HF_WEIGHTS_DIR", "").strip()
+if dest_dir:
+    dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id=repo, local_dir=str(dest))
 else:
@@ -599,8 +592,8 @@ else:
 PY"""
         dl_parts: list[str] = [cd_home_then_run, f"module load {py_mod}"]
         append_login_modules(dl_parts, login_modules)
-        if hf_weights_rel:
-            dl_parts.append(f"export HF_WEIGHTS_HOME_REL={shlex.quote(hf_weights_rel)}")
+        if hf_weights_dir:
+            dl_parts.append(f"export HF_WEIGHTS_DIR={shlex.quote(hf_weights_dir)}")
         if hf_tok is not None:
             dl_parts.append(f"export HF_TOKEN={shlex.quote(hf_tok)}")
         dl_parts.extend(
@@ -640,7 +633,7 @@ PY"""
             user,
             identity,
             control_socket,
-            remote_speculators_preflight(cd_home_then_run, hf_weights_rel),
+            remote_speculators_preflight(cd_home_then_run, hf_weights_dir),
         )
     except subprocess.CalledProcessError as e:
         if e.returncode == 4:

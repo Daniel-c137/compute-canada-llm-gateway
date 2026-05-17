@@ -37,8 +37,8 @@ echo "MODEL: {{ model }}" | tee -a vllm_node_info.txt
 
 # Set model path in separate statements so Jinja control lines never insert a blank line
 # between a trailing '\' and the next argument (bash would end the continued command there).
-{% if hf_weights_home_rel %}
-MODEL_PATH="${HOME}/{{ hf_weights_home_rel }}"
+{% if hf_weights_dir %}
+MODEL_PATH={{ hf_weights_dir | tojson }}
 {% else %}
 MODEL_PATH={{ model | tojson }}
 {% endif %}
