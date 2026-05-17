@@ -313,6 +313,11 @@ def remote_venv_pip(pip_cli_args: str, *, alliance_opencv: bool) -> str:
     return f"{VENV_PY_SH} -m pip {pip_cli_args}"
 
 
+def remote_mkdir_p(path: str) -> str:
+    """Shell fragment: create ``path`` on the login node (Alliance-safe: cd ~, /bin/mkdir, --)."""
+    return f"cd ~ && /bin/mkdir -p -- {shlex.quote(path)}"
+
+
 def remote_speculators_preflight(cd_home_then_run: str, hf_weights_dir: str | None) -> str:
     """SSH fragment: fail before sbatch if config.json uses speculators with a Hub-only verifier (offline compute)."""
     if hf_weights_dir:
@@ -484,8 +489,18 @@ def main() -> None:
 
     identity = args.ssh_identity
 
-    mkdir_script = f"cd ~ && mkdir -p {run_rel_q}"
-    run_remote(host, user, identity, control_socket, mkdir_script)
+    hf_weights_dir = hf_shared_weights_dir(cfg, user, args.model)
+    if hf_weights_dir:
+        print(
+            f"HF weights reuse: snapshot and vLLM will use {hf_weights_dir} "
+            "(set hf_hub_weights_parent to change the subdirectory name).\n",
+            file=sys.stderr,
+        )
+
+    mkdir_parts = [remote_mkdir_p(run_rel)]
+    if hf_weights_dir:
+        mkdir_parts.append(remote_mkdir_p(str(Path(hf_weights_dir).parent)))
+    run_remote(host, user, identity, control_socket, " && ".join(mkdir_parts))
 
     py_mod = shlex.quote(cfg.get("python_module", "python/3.11"))
     login_modules = merge_str_list(cfg, preset, "extra_login_modules")
@@ -498,22 +513,6 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-
-    hf_weights_dir = hf_shared_weights_dir(cfg, user, args.model)
-    if hf_weights_dir:
-        print(
-            f"HF weights reuse: snapshot and vLLM will use {hf_weights_dir} "
-            "(set hf_hub_weights_parent to change the subdirectory name).\n",
-            file=sys.stderr,
-        )
-        weights_parent = str(Path(hf_weights_dir).parent)
-        run_remote(
-            host,
-            user,
-            identity,
-            control_socket,
-            f"mkdir -p {shlex.quote(weights_parent)}",
-        )
 
     sbatch_body = render_sbatch(
         cfg, preset, args.walltime, args.port, args.model, hf_weights_dir=hf_weights_dir
