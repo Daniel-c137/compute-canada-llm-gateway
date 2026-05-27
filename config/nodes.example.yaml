@@ -4,39 +4,88 @@
 # Pick billing bucket b1..b5 per your group / documentation (b1 is a common default).
 
 ssh_host: "rorqual.alliancecan.ca"
-ssh_user: "your_cc_username"
-# Optional: path to SSH ControlMaster socket for Duo/MFA (see README). Same as CC_SSH_CONTROL_SOCKET.
-# ssh_control_socket: "~/.ssh/cm-rorqual"
+ssh_user: "msina"
 slurm_account: "rrg-tayebi"
 python_module: "python/3.11"
-# Login: list module loads in order; include opencv before venv (Alliance / vLLM + pip --no-index).
-# extra_login_modules:
-#   - "gcc"
-#   - "cuda/12.6"
-#   - "gcc opencv/4.12.0"
-# extra_compute_modules:
-#   - "gcc"
-#   - "cuda/12.6"
-#   - "gcc opencv/4.12.0"
-# Optional: extra arguments after `--dtype auto` on the vLLM api_server line (preset can override).
-# extra_vllm_cli:
-#   - "--trust-remote-code"
-# Optional: enables --enable-auto-tool-choice + --tool-call-parser (config or per-preset).
-# vllm_tool_call_parser: "hermes"
 remote_subdir: "cc-llm-runs"
-# Shared HF weights under /project/<slurm_account>/<ssh_user>/ (default subdir cc-llm-hf-weights).
-# hf_hub_weights_parent: "cc-llm-hf-weights"
-# Match vLLM --max-model-len; cc_run_gateway sets UPSTREAM_MAX_MODEL_LEN for the gateway.
-# gateway_max_model_len: 32768
+ssh_control_socket: "~/.ssh/cm-rorqual-{msina}"
+# Shared HF weights: /project/<slurm_account>/<ssh_user>/<hf_hub_weights_parent>/org--repo
+hf_hub_weights_parent: "cc-llm-hf-weights"
+# Match vLLM --max-model-len on the running job; gateway caps max_tokens to leave room for prompts.
+gateway_max_model_len: 65536
+# LOGIN: all lines load before `python -m venv` (Alliance OpenCV wiki). Include opencv so vLLM
+# does not pull opencv-noinstall. Use `module spider opencv` on the login node if this version is unavailable.
+extra_login_modules:
+  - "gcc"
+  - "cuda/12.6"
+  - "gcc opencv/4.12.0"
+extra_compute_modules:
+  - "gcc"
+  - "cuda/12.6"
+  - "gcc opencv/4.12.0"
 
 presets:
+  - id: "rorqual_h100_full_4_qwen3"
+    label: "4× full H100 80GB (gpubase_bynode_b1 — Qwen3-235B-A22B-FP8 with tensor-parallel-size 4)"
+    partition: "gpubase_bynode_b1"
+    gpus_per_node: "h100:4"
+    cpus_per_task: 64
+    mem: "490G"
+    extra_sbatch: []
+    vllm_tool_call_parser: "hermes"
+    extra_vllm_cli:
+      - "--tensor-parallel-size"
+      - "4"
+      - "--max-model-len"
+      - "65536"
+      - "--gpu-memory-utilization"
+      - "0.92"
+      - "--trust-remote-code"
+      - "--disable-custom-all-reduce"
+  - id: "rorqual_h100_full_2"
+    label: "2× full H100 (Qwen3-32B, tools, 32k context — default 2-GPU)"
+    partition: "gpubase_bygpu_b1"
+    gpus_per_node: "h100:2"
+    cpus_per_task: 48
+    mem: "200G"
+    extra_sbatch: []
+    vllm_tool_call_parser: "hermes"
+    extra_vllm_cli:
+      - "--tensor-parallel-size"
+      - "2"
+      - "--max-model-len"
+      - "32768"
+      - "--gpu-memory-utilization"
+      - "0.90"
+
+  - id: "rorqual_h100_gpt_oss_2"
+    label: "2× full H100 (gpt-oss-120b — low context, memory-tight)"
+    partition: "gpubase_bygpu_b1"
+    gpus_per_node: "h100:2"
+    cpus_per_task: 48
+    mem: "200G"
+    extra_sbatch: []
+    extra_vllm_cli:
+      - "--tensor-parallel-size"
+      - "2"
+      - "--max-model-len"
+      - "4096"
+      - "--gpu-memory-utilization"
+      - "0.85"
+      - "--enforce-eager"
+
   - id: "rorqual_h100_full_1"
     label: "1× full H100 (gpubase_bygpu_b1, highest RGU — larger vLLM)"
     partition: "gpubase_bygpu_b1"
     gpus_per_node: "h100:1"
     cpus_per_task: 24
-    mem: "256G"
+    mem: "120G"
     extra_sbatch: []
+    # Qwen3 tool calls; ~32k context fits 1× H100 with Qwen3-32B (see slurm log KV estimate).
+    vllm_tool_call_parser: "hermes"
+    extra_vllm_cli:
+      - "--max-model-len"
+      - "32768"
 
   # MIG presets: Slurm often sets CUDA_VISIBLE_DEVICES to MIG-… UUIDs. vLLM 0.20.x may crash with
   # ValueError: invalid literal for int() … 'MIG-…'. Prefer rorqual_h100_full_1 unless you have a vLLM build that fixes this.
@@ -72,25 +121,3 @@ presets:
     mem: "48G"
     extra_sbatch: []
 
-  # 4× H100 — Qwen3-235B-A22B-FP8 (tensor parallel across all 4 GPUs).
-  # Use model id: Qwen/Qwen3-235B-A22B-FP8 (official FP8 checkpoint; ~235 GB weights, ~59 GB/GPU with TP=4).
-  # BF16 base weights (~470 GB) do NOT fit in 4×80 GB; always use the -FP8 variant with this preset.
-  # Set gateway_max_model_len: 65536 in your nodes.yaml to match vLLM --max-model-len below.
-  # Tool calling: hermes parser covers Qwen3's <tool_call>…</tool_call> format; try qwen25 on vLLM ≥ 0.6.
-  - id: "rorqual_h100_full_4_qwen3"
-    label: "4× full H100 80GB (gpubase_bynode_b1 — Qwen3-235B-A22B-FP8 with tensor-parallel-size 4)"
-    partition: "gpubase_bynode_b1"
-    gpus_per_node: "h100:4"
-    cpus_per_task: 64
-    mem: "490G"
-    extra_sbatch: []
-    vllm_tool_call_parser: "hermes"
-    extra_vllm_cli:
-      - "--tensor-parallel-size"
-      - "4"
-      - "--max-model-len"
-      - "65536"
-      - "--gpu-memory-utilization"
-      - "0.92"
-      - "--trust-remote-code"
-      - "--disable-custom-all-reduce"
