@@ -21,9 +21,13 @@ python_module: "python/3.11"
 # Optional: extra arguments after `--dtype auto` on the vLLM api_server line (preset can override).
 # extra_vllm_cli:
 #   - "--trust-remote-code"
+# Optional: enables --enable-auto-tool-choice + --tool-call-parser (config or per-preset).
+# vllm_tool_call_parser: "hermes"
 remote_subdir: "cc-llm-runs"
 # Shared HF weights under /project/<slurm_account>/<ssh_user>/ (default subdir cc-llm-hf-weights).
 # hf_hub_weights_parent: "cc-llm-hf-weights"
+# Match vLLM --max-model-len; cc_run_gateway sets UPSTREAM_MAX_MODEL_LEN for the gateway.
+# gateway_max_model_len: 32768
 
 presets:
   - id: "rorqual_h100_full_1"
@@ -67,3 +71,26 @@ presets:
     cpus_per_task: 8
     mem: "48G"
     extra_sbatch: []
+
+  # 4× H100 — Qwen3-235B-A22B-FP8 (tensor parallel across all 4 GPUs).
+  # Use model id: Qwen/Qwen3-235B-A22B-FP8 (official FP8 checkpoint; ~235 GB weights, ~59 GB/GPU with TP=4).
+  # BF16 base weights (~470 GB) do NOT fit in 4×80 GB; always use the -FP8 variant with this preset.
+  # Set gateway_max_model_len: 65536 in your nodes.yaml to match vLLM --max-model-len below.
+  # Tool calling: hermes parser covers Qwen3's <tool_call>…</tool_call> format; try qwen25 on vLLM ≥ 0.6.
+  - id: "rorqual_h100_full_4_qwen3"
+    label: "4× full H100 80GB (gpubase_bynode_b1 — Qwen3-235B-A22B-FP8 with tensor-parallel-size 4)"
+    partition: "gpubase_bynode_b1"
+    gpus_per_node: "h100:4"
+    cpus_per_task: 64
+    mem: "490G"
+    extra_sbatch: []
+    vllm_tool_call_parser: "hermes"
+    extra_vllm_cli:
+      - "--tensor-parallel-size"
+      - "4"
+      - "--max-model-len"
+      - "65536"
+      - "--gpu-memory-utilization"
+      - "0.92"
+      - "--trust-remote-code"
+      - "--disable-custom-all-reduce"

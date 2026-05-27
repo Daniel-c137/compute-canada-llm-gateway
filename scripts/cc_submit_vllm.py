@@ -273,6 +273,18 @@ def merge_str_list(cfg: dict[str, Any], preset: dict[str, Any], key: str) -> lis
     return [str(x) for x in raw if str(x).strip()]
 
 
+def resolve_extra_vllm_cli(cfg: dict[str, Any], preset: dict[str, Any]) -> list[str]:
+    """Merge preset/config ``extra_vllm_cli`` and optional ``vllm_tool_call_parser`` (Anthropic/OpenAI tools)."""
+    cli = merge_str_list(cfg, preset, "extra_vllm_cli")
+    parser = preset.get("vllm_tool_call_parser")
+    if parser is None:
+        parser = cfg.get("vllm_tool_call_parser")
+    parser_s = str(parser).strip() if parser is not None else ""
+    if parser_s and "--enable-auto-tool-choice" not in cli:
+        cli = [*cli, "--enable-auto-tool-choice", "--tool-call-parser", parser_s]
+    return cli
+
+
 def sh_module_load(spec: str) -> str:
     """One `module load` shell fragment. Multiple names separated by spaces share one `module load` invocation."""
     parts = spec.strip().split()
@@ -381,7 +393,7 @@ def render_sbatch(
     tpl = env.get_template("vllm_sbatch.sh.j2")
     extra = preset.get("extra_sbatch") or []
     extra_compute_modules = merge_str_list(cfg, preset, "extra_compute_modules")
-    extra_vllm_cli = merge_str_list(cfg, preset, "extra_vllm_cli")
+    extra_vllm_cli = resolve_extra_vllm_cli(cfg, preset)
     return tpl.render(
         slurm_account=cfg["slurm_account"],
         partition=preset["partition"],

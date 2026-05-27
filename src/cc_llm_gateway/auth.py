@@ -22,13 +22,19 @@ def verify_token(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Gateway token not initialized",
         )
-    if creds is None or creds.scheme.lower() != "bearer":
+    # Accept Authorization: Bearer <token> (standard) or x-api-key: <token> (Anthropic SDK / Claude Code).
+    presented: str | None = None
+    if creds is not None and creds.scheme.lower() == "bearer":
+        presented = creds.credentials
+    else:
+        presented = request.headers.get("x-api-key")
+    if presented is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header (Bearer token required)",
+            detail="Missing credentials (Authorization: Bearer <token> or x-api-key: <token> required)",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if creds.credentials != expected:
+    if presented != expected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",

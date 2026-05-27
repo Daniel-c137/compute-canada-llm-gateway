@@ -373,6 +373,9 @@ def main() -> None:
     print("Forwarded port is accepting connections; starting gateway.", file=sys.stderr)
 
     os.environ["UPSTREAM_BASE_URL"] = f"http://127.0.0.1:{args.forwarded_port}"
+    gw_len = cfg.get("gateway_max_model_len")
+    if gw_len is not None and str(gw_len).strip():
+        os.environ["UPSTREAM_MAX_MODEL_LEN"] = str(int(gw_len))
     if not os.environ.get("GATEWAY_TOKEN"):
         print(
             "GATEWAY_TOKEN not set; the gateway will generate one and print it on startup.",

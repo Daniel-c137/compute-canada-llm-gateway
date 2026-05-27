@@ -108,3 +108,36 @@ def test_v1_messages_anthropic(upstream_url: str):
         body = r.json()
         assert body["type"] == "message"
         assert any(c.get("text") == "Hello back" for c in body.get("content", []) if isinstance(c, dict))
+
+
+@respx.mock
+def test_v1_messages_anthropic_stream(upstream_url: str):
+    openai_sse = (
+        'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}\n\n'
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def stream_upstream(request):
+        return httpx.Response(200, content=openai_sse.encode("utf-8"))
+
+    respx.post(f"{upstream_url}/v1/chat/completions").mock(side_effect=stream_upstream)
+
+    with TestClient(create_app()) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            headers={"Authorization": "Bearer test-token-fixed"},
+            json={
+                "model": "m",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": True,
+            },
+        ) as r:
+            assert r.status_code == 200
+            body = "".join(r.iter_text())
+            assert "event: message_start" in body
+            assert "content_block_delta" in body
+            assert "Hi" in body
+            assert "event: message_stop" in body

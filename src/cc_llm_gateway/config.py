@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     upstream_base_url: str = "http://127.0.0.1:8000"
     gateway_token: str | None = None
     protect_docs: bool = False
+    # Match vLLM --max-model-len; caps client max_tokens so prompt + output fit in context.
+    upstream_max_model_len: int | None = None
 
 
 @lru_cache

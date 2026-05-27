@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 # Anthropic content blocks -> plain text for OpenAI
@@ -78,17 +79,56 @@ def anthropic_tools_to_openai(tools: list[dict[str, Any]] | None) -> list[dict[s
     return openai_tools or None
 
 
-def build_openai_body_from_anthropic(body: dict[str, Any]) -> dict[str, Any]:
+def anthropic_tool_choice_to_openai(tool_choice: Any) -> str | dict[str, Any] | None:
+    """Map Anthropic ``tool_choice`` to OpenAI chat-completions ``tool_choice``."""
+    if tool_choice is None:
+        return None
+    if isinstance(tool_choice, str):
+        if tool_choice == "auto":
+            return "auto"
+        if tool_choice == "any":
+            return "required"
+        if tool_choice == "none":
+            return "none"
+        return tool_choice
+    if isinstance(tool_choice, dict):
+        t = tool_choice.get("type")
+        if t == "auto":
+            return "auto"
+        if t == "any":
+            return "required"
+        if t == "tool":
+            name = tool_choice.get("name")
+            if isinstance(name, str) and name:
+                return {"type": "function", "function": {"name": name}}
+        return tool_choice
+    return None
+
+
+def clamp_completion_tokens(requested: int, max_model_len: int | None) -> int:
+    """Reserve at least ~25% of the context window for the prompt (tools inflate size)."""
+    if max_model_len is None or max_model_len < 512:
+        return requested
+    return min(requested, max(64, (max_model_len * 3) // 4))
+
+
+def build_openai_body_from_anthropic(
+    body: dict[str, Any],
+    *,
+    upstream_max_model_len: int | None = None,
+) -> dict[str, Any]:
     model = body.get("model", "")
-    max_tokens = body.get("max_tokens", 1024)
+    max_tokens = clamp_completion_tokens(int(body.get("max_tokens", 1024)), upstream_max_model_len)
     temperature = body.get("temperature", 1.0)
     messages = body.get("messages") or []
     system = body.get("system")
     stream = bool(body.get("stream", False))
     tools = body.get("tools")
+    tool_choice = body.get("tool_choice")
 
     oa_messages = anthropic_messages_to_openai(messages, system)
     oa_tools = anthropic_tools_to_openai(tools)
+    oa_tool_choice = anthropic_tool_choice_to_openai(tool_choice)
 
     payload: dict[str, Any] = {
         "model": model,
@@ -99,6 +139,10 @@ def build_openai_body_from_anthropic(body: dict[str, Any]) -> dict[str, Any]:
     }
     if oa_tools:
         payload["tools"] = oa_tools
+        if oa_tool_choice is not None:
+            payload["tool_choice"] = oa_tool_choice
+        elif "tool_choice" not in payload:
+            payload["tool_choice"] = "auto"
     return payload
 
 
@@ -159,3 +203,184 @@ def openai_completion_to_anthropic_message(
         "stop_sequence": None,
         "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
     }
+
+
+def _openai_finish_to_anthropic_stop(finish: str | None) -> str:
+    if finish == "tool_calls":
+        return "tool_use"
+    if finish == "length":
+        return "max_tokens"
+    return "end_turn"
+
+
+def _anthropic_sse_event(event_type: str, payload: dict[str, Any]) -> bytes:
+    return f"event: {event_type}\ndata: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\n\n".encode(
+        "utf-8"
+    )
+
+
+class _OpenAIStreamToAnthropic:
+    """Translate OpenAI chat-completion SSE lines into Anthropic Messages SSE events."""
+
+    def __init__(self, anthropic_model: str, message_id: str | None = None) -> None:
+        self.anthropic_model = anthropic_model
+        self.message_id = message_id or f"msg_{uuid.uuid4().hex[:24]}"
+        self._started = False
+        self._block_open = False
+        self._block_index = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._finish_reason: str | None = None
+
+    def _ensure_message_start(self) -> list[bytes]:
+        if self._started:
+            return []
+        self._started = True
+        return [
+            _anthropic_sse_event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": self.message_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": self.anthropic_model,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": self._input_tokens, "output_tokens": 1},
+                    },
+                },
+            )
+        ]
+
+    def _ensure_text_block_start(self) -> list[bytes]:
+        if self._block_open:
+            return []
+        self._block_open = True
+        return [
+            _anthropic_sse_event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": self._block_index,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+        ]
+
+    def _finalize(self) -> list[bytes]:
+        if not self._started:
+            return []
+        out: list[bytes] = []
+        if self._block_open:
+            out.append(
+                _anthropic_sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": self._block_index},
+                )
+            )
+            self._block_open = False
+        stop = _openai_finish_to_anthropic_stop(self._finish_reason)
+        out.append(
+            _anthropic_sse_event(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop, "stop_sequence": None},
+                    "usage": {"output_tokens": max(self._output_tokens, 1)},
+                },
+            )
+        )
+        out.append(_anthropic_sse_event("message_stop", {"type": "message_stop"}))
+        self._started = False
+        return out
+
+    def feed_line(self, line: str) -> list[bytes]:
+        line = line.strip()
+        if not line or line.startswith(":"):
+            return []
+        if not line.startswith("data:"):
+            return []
+        data_str = line[5:].strip()
+        if data_str == "[DONE]":
+            return self._finalize()
+
+        try:
+            chunk = json.loads(data_str)
+        except json.JSONDecodeError:
+            return []
+
+        usage = chunk.get("usage") or {}
+        if usage.get("prompt_tokens"):
+            self._input_tokens = int(usage["prompt_tokens"])
+        if usage.get("completion_tokens"):
+            self._output_tokens = int(usage["completion_tokens"])
+
+        choices = chunk.get("choices") or []
+        if not choices:
+            return []
+        choice0 = choices[0]
+        if choice0.get("finish_reason"):
+            self._finish_reason = str(choice0["finish_reason"])
+
+        delta = choice0.get("delta") or {}
+        text = delta.get("content")
+        if not text:
+            return []
+
+        if not isinstance(text, str):
+            text = json.dumps(text, ensure_ascii=False)
+
+        out: list[bytes] = []
+        out.extend(self._ensure_message_start())
+        out.extend(self._ensure_text_block_start())
+        self._output_tokens += 1
+        out.append(
+            _anthropic_sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._block_index,
+                    "delta": {"type": "text_delta", "text": text},
+                },
+            )
+        )
+        return out
+
+    def finish(self) -> list[bytes]:
+        return self._finalize()
+
+
+def iter_anthropic_sse_from_openai_sse_lines(
+    lines: Iterator[str],
+    anthropic_model: str,
+    *,
+    message_id: str | None = None,
+) -> Iterator[bytes]:
+    translator = _OpenAIStreamToAnthropic(anthropic_model, message_id=message_id)
+    for line in lines:
+        yield from translator.feed_line(line)
+    yield from translator.finish()
+
+
+async def openai_sse_bytes_to_anthropic_sse(
+    byte_chunks: AsyncIterator[bytes],
+    anthropic_model: str,
+    *,
+    message_id: str | None = None,
+) -> AsyncIterator[bytes]:
+    translator = _OpenAIStreamToAnthropic(anthropic_model, message_id=message_id)
+    buffer = ""
+    async for chunk in byte_chunks:
+        buffer += chunk.decode("utf-8", errors="replace")
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            for event in translator.feed_line(line):
+                yield event
+    if buffer.strip():
+        for event in translator.feed_line(buffer):
+            yield event
+    for event in translator.finish():
+        yield event

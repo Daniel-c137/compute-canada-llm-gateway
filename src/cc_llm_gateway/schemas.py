@@ -78,7 +78,11 @@ class AnthropicMessagesRequest(BaseModel):
         None,
         description="Anthropic tools (`name`, `description`, `input_schema`); translated to OpenAI `tools`.",
     )
+    tool_choice: str | dict[str, Any] | None = Field(
+        None,
+        description="Anthropic tool choice (`auto`, `any`, or `{type: tool, name: ...}`); requires vLLM `--enable-auto-tool-choice`.",
+    )
     stream: bool = Field(
         False,
-        description="Streaming is not supported on this route; leave false or omit (sending true returns 400).",
+        description="If true, returns Anthropic SSE (`message_start`, `content_block_delta`, …) translated from upstream OpenAI streaming.",
     )
