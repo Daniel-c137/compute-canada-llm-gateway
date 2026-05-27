@@ -140,7 +140,66 @@ curl -sS http://<vm>:8080/v1/chat/completions \
   -d '{"model":"<vllm-model-id>","messages":[{"role":"user","content":"Hi"}],"stream":false}'
 ```
 
-Anthropic-shaped (non-stream): `POST /v1/messages` with `model`, `max_tokens`, `messages`.
+Anthropic-shaped: `POST /v1/messages` with `model`, `max_tokens`, `messages` — streaming supported.
+
+---
+
+## Using with Claude Code
+
+The gateway speaks the Anthropic Messages API, so Claude Code works by pointing `ANTHROPIC_BASE_URL` at your VM's proxy port and setting the model names to whatever vLLM is serving.
+
+### 1. Find the served model name
+
+After `cc_run_gateway.py` is up, query the models endpoint:
+
+```bash
+curl -s http://localhost:8080/v1/models \
+  -H "Authorization: Bearer $GATEWAY_TOKEN" | python3 -m json.tool
+```
+
+The `"id"` field is the name to use in the next step (e.g. `Qwen/Qwen3-235B-A22B-FP8`).
+
+### 2. Add settings to `~/.claude/settings.json`
+
+Open (or create) `~/.claude/settings.json` and add an `env` block:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://<your-vm-ip>:8080",
+    "ANTHROPIC_AUTH_TOKEN": "<your-gateway-token>",
+    "API_TIMEOUT_MS": "3000000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL":  "Qwen/Qwen3-235B-A22B-FP8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "Qwen/Qwen3-235B-A22B-FP8",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL":   "Qwen/Qwen3-235B-A22B-FP8"
+  }
+}
+```
+
+> Use `http://localhost:8080` if Claude Code runs on the same machine as the gateway.
+
+| Variable | What it does |
+|---|---|
+| `ANTHROPIC_BASE_URL` | Points Claude Code at your gateway instead of `api.anthropic.com` |
+| `ANTHROPIC_AUTH_TOKEN` | The `GATEWAY_TOKEN` you set when running `cc_run_gateway.py` |
+| `ANTHROPIC_DEFAULT_*_MODEL` | Maps every model tier (haiku/sonnet/opus) to your deployed model |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Cap on tokens Claude Code requests per turn; keep ≤ `gateway_max_model_len / 2` |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Skips telemetry/version-check calls that would also hit the gateway |
+| `API_TIMEOUT_MS` | Generous timeout for long-running completions on a queued cluster |
+
+### 3. Set `gateway_max_model_len` in `nodes.yaml`
+
+The gateway uses this value to cap output tokens so the prompt + output never exceeds the model's context window. Set it to match the `--max-model-len` in your preset's `extra_vllm_cli`:
+
+```yaml
+gateway_max_model_len: 65536   # must match --max-model-len passed to vLLM
+```
+
+### 4. Verify
+
+Launch Claude Code in any project. The first request hits the gateway, which you'll see in the `cc_run_gateway.py` terminal as a `/v1/messages` proxy log line. If you get a **401** check your token; a **400 context length** error means the prompt + `CLAUDE_CODE_MAX_OUTPUT_TOKENS` exceeds `gateway_max_model_len`.
 
 ---
 
@@ -189,7 +248,7 @@ Edit [`templates/vllm_sbatch.sh.j2`](templates/vllm_sbatch.sh.j2) for Apptainer,
 
 ## Limitations (v0.1)
 
-- `/v1/messages` **streaming** is not supported; use `/v1/chat/completions` with `stream: true`.
+- Both `/v1/messages` (Anthropic) and `/v1/chat/completions` (OpenAI) support streaming.
 - `squeue` hostname pick is best-effort; use `--compute-host` if needed.
 - Alliance module and wheel policies change—verify against current docs.
 - Job template is **single-node**; multi-node vLLM is not automated here.
