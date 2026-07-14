@@ -29,19 +29,31 @@ adjusting (or export it at submit time).
 
 ## 2. Stage weights (login node — compute nodes have no internet)
 
-```bash
-module load python/3.11 && pip install -U "huggingface_hub[cli]" --user   # or use your venv
-hf download moonshotai/Kimi-K2.6 --cache-dir "$HF_HOME/hub"
-# note: the entrypoint is `hf download` in recent hub versions (`huggingface-cli` is gone)
-```
-
-## 3. Materialize the model dir (required for Kimi: `trust_remote_code` + symlinked HF cache)
+The profile declares the source (`HF_REPO`) and layout (`NEEDS_MATERIALIZED_DIR`);
+`stage-model.sh` makes `MODEL_PATH` real from them — download, then materialize (Kimi:
+`trust_remote_code` + the symlinked HF cache breaks relative imports) or plain-symlink:
 
 ```bash
-source site.env
-./materialize-model.sh moonshotai/Kimi-K2.6 /scratch/$USER/llm-serve/kimi-model
-# prints "all relative imports resolve — OK" on success; ~75 KB on disk (weights symlinked)
+module load python/3.11 && pip install -U "huggingface_hub[cli]" --user   # once, for `hf`
+./stage-model.sh profiles/kimi-k2.6.env site.env
+# ends with "all relative imports resolve — OK" (materialized; ~75 KB on disk, weights symlinked)
 ```
+
+Gated models: accept the license on the HF website and `export HF_TOKEN=...` first.
+
+## 3. Size the resource request from the ACTUAL checkpoint
+
+Never size from a bits-per-param rule of thumb — read what's on disk (a native-INT4 model
+assumed FP8 is a 2× planning error):
+
+```bash
+python3 ./estimate-gpus.py --model-dir /scratch/$USER/llm-serve/kimi-model
+# Kimi-K2.6: 523 GB native INT4, MoE -> min 9 GPUs -> 3 nodes x 4xH100, TP4 x DP3 + EP
+```
+
+It reads weight bytes (safetensors index), `quantization_config`, and expert counts, then
+prints the arithmetic and a topology suggestion. KV cache is NOT modeled — sanity-check the
+printed headroom against your `MAX_MODEL_LEN` (see the script docstring).
 
 ## 4. Build the env (login node) and patch DP timeouts
 
@@ -112,7 +124,7 @@ Re-run the canary battery **through the gateway** before trusting it:
 ```bash
 python3 scripts/diagnostics/canary-battery.py \
   --base-url http://<vm>:8080/v1 --model moonshotai/Kimi-K2.6 \
-  --thinking-kill-switch --api-key "$GATEWAY_TOKEN"
+  --chat-template-kwargs '{"thinking": false}' --api-key "$GATEWAY_TOKEN"
 ```
 
 ## 8. Troubleshooting (each of these cost us real jobs)
@@ -128,7 +140,33 @@ python3 scripts/diagnostics/canary-battery.py \
 | Hangs mid-generation at ~5 min from a Node client | undici 300 s headers wall — switch to `node:http(s)` |
 | Job zombie-holds after engine death | The health-wait's fatal-signature grep should abort it; if you see a new fatal string, add it to `FATAL` in the sbatch |
 
-## 9. Honest status
+## 9. Adapting to another model — the four questions a new profile must answer
+
+Copy `profiles/kimi-k2.6.env` (proven) or `profiles/qwen3-32b.example.env` (dense/single-node
+shape, untested) and answer:
+
+1. **Where do the weights come from?** `HF_REPO` (+ `HF_TOKEN` if gated). `stage-model.sh`
+   turns it into `MODEL_PATH`; set `NEEDS_MATERIALIZED_DIR=1` only for `trust_remote_code`
+   models with relative imports.
+2. **How big a request?** `estimate-gpus.py --model-dir ...` on the staged checkpoint —
+   precision comes from `quantization_config`, not assumptions. Single-node result → submit
+   with `--nodes=1` (TP only, DP machinery idle); multi-node → TP=GPUs-per-node × DP=nodes,
+   `ENABLE_EXPERT_PARALLEL=1` if MoE.
+3. **Agentic or not?** Agentic: set `TOOL_CALL_PARSER` (per-model — `kimi_k2`, `hermes`, ...;
+   probe `vllm serve --help` in-job), `ENABLE_AUTO_TOOL_CHOICE=1`, `CANARY_TOOLS=1` so the
+   battery gates on tool-call + turn-2 roundtrip. Non-agentic: empty `TOOL_CALL_PARSER`,
+   `CANARY_TOOLS=0` — no parser flags are passed and the canary skips tool phases; coherence
+   still gates.
+4. **Thinking-by-default?** Set `CHAT_TEMPLATE_KWARGS` with the *model's* kwarg key
+   (`{"thinking": false}` for Kimi, `{"enable_thinking": false}` for Qwen3-class) or leave
+   empty. Empty `content` with text in `reasoning_content` is the symptom of getting this
+   wrong.
+
+Then: 1-GPU PTX preflight (step 5) → **verdict-shaped first serve** (step 6). Tuning values
+(`GPU_MEMORY_UTILIZATION`, `MAX_NUM_SEQS`, `MAX_NUM_BATCHED_TOKENS`) carry over as starting
+points only.
+
+## 10. Honest status
 
 The scripts are generalized (profile + site split), but only the **Kimi-K2.6 / Rorqual /
 vLLM 0.24 / cuda 13.2** combination is serve-proven end-to-end. First runs on other models,

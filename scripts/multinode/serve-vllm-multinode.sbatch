@@ -128,7 +128,7 @@ echo "vLLM ready after ${WAIT}s."
 module load $MODULES; source "$VENV/bin/activate"
 CANARY_FLAGS=( --base-url "http://$HEAD_IP:$API_PORT/v1" --model "$SERVED_MODEL_NAME"
                --warm-ranks $((SLURM_NNODES * 2)) )
-[ "${THINKING_KILL_SWITCH:-0}" = 1 ] && CANARY_FLAGS+=( --thinking-kill-switch )
+[ -n "${CHAT_TEMPLATE_KWARGS:-}" ] && CANARY_FLAGS+=( --chat-template-kwargs "$CHAT_TEMPLATE_KWARGS" )
 [ "${CANARY_TOOLS:-1}" = 1 ] || CANARY_FLAGS+=( --no-tools )
 if python3 "$DIAG_DIR/canary-battery.py" "${CANARY_FLAGS[@]}"; then
   CANARY_RC=0

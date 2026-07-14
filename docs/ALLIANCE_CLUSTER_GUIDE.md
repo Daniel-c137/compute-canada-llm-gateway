@@ -187,6 +187,8 @@ otherwise burns the whole walltime.
 
 - **GPU sizing:** read the *actual checkpoint* (file sizes + config precision), don't apply a
   bits-per-param rule of thumb. We watched a doc mis-size a native-INT4 model by assuming FP8.
+  `scripts/multinode/estimate-gpus.py` does this: safetensors bytes + `quantization_config` +
+  MoE detection → GPU count and topology suggestion (KV explicitly not modeled).
 - **Thinking-by-default models** (Kimi et al.): send `chat_template_kwargs: {"thinking": false}`
   or `content` comes back empty (everything routes to `reasoning_content`).
 - **Tool/reasoning parser flags** are per-model (`--tool-call-parser kimi_k2`); some versions lack

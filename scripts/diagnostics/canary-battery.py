@@ -24,7 +24,7 @@ Exit 0 iff coherent AND (tools pass or --no-tools). stdlib only; stream:false th
 
 Usage:
   canary-battery.py --base-url http://HOST:8000/v1 --model org/name \\
-      [--thinking-kill-switch] [--no-tools] [--warm-ranks N] [--timeout 600]
+      [--chat-template-kwargs '{"thinking": false}'] [--no-tools] [--warm-ranks N] [--timeout 600]
 
 Re-run periodically on long-lived serves (mid-campaign sentinel): upstream reports document
 coherent-then-garbage degradation appearing only after hours of normal traffic.
@@ -40,8 +40,10 @@ import urllib.request
 ap = argparse.ArgumentParser()
 ap.add_argument("--base-url", required=True, help="e.g. http://10.0.0.1:8000/v1")
 ap.add_argument("--model", required=True)
-ap.add_argument("--thinking-kill-switch", action="store_true",
-                help="send chat_template_kwargs:{thinking:false} (thinking-by-default models)")
+ap.add_argument("--chat-template-kwargs", default="",
+                help='JSON sent as chat_template_kwargs on every request, e.g. '
+                     '\'{"thinking": false}\' (Kimi) or \'{"enable_thinking": false}\' (Qwen3) '
+                     '— thinking-by-default models return empty content without it')
 ap.add_argument("--no-tools", action="store_true", help="skip tool-call phases (non-tool models)")
 ap.add_argument("--warm-ranks", type=int, default=0,
                 help="fire N concurrent short completions first (touch all DP ranks)")
@@ -50,12 +52,13 @@ ap.add_argument("--api-key", default="", help="Bearer token if the endpoint requ
 args = ap.parse_args()
 
 URL = args.base_url.rstrip("/") + "/chat/completions"
+CT_KWARGS = json.loads(args.chat_template_kwargs) if args.chat_template_kwargs else None
 
 
 def post(body):
     body = dict(body, model=args.model, stream=False)
-    if args.thinking_kill_switch:
-        body["chat_template_kwargs"] = {"thinking": False}
+    if CT_KWARGS is not None:
+        body["chat_template_kwargs"] = CT_KWARGS
     req = urllib.request.Request(URL, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     if args.api_key:
