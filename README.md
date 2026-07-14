@@ -60,9 +60,14 @@ This fork adds field-tested documentation beyond the single-node gateway flow, f
   and SLURM scheduling tactics. Starts with an honest proven-vs-untested inventory.
 - **[docs/ALLIANCE_WIKI_NOTE_DRAFT.md](docs/ALLIANCE_WIKI_NOTE_DRAFT.md)** — draft Alliance wiki
   note for the cuda/13 module contract (support ticket #0317340).
+- **[docs/KIMI_K26_RUNBOOK.md](docs/KIMI_K26_RUNBOOK.md)** — end-to-end reproduction of the
+  proven multi-node agentic deployment (Kimi-K2.6, native tool calling) using the generalized
+  **[scripts/multinode/](scripts/multinode/)** toolkit: model *profiles* + `site.env` +
+  parameterized sbatch (TP×DP+EP, hardened health-wait, canary gate, `SERVE_READY` handoff).
 - **[scripts/diagnostics/](scripts/diagnostics/)** — `ptx_jit_repro.py` (30-second, 1-GPU,
-  stdlib-only wheel↔driver compatibility preflight) and `judge-canary.py` (endpoint coherence
-  check — a green `/health` is not health).
+  stdlib-only wheel↔driver compatibility preflight), `canary-battery.py` (coherence +
+  tool-call + turn-2 roundtrip against any OpenAI-compatible endpoint — a green `/health` is
+  not health), and `judge-canary.py` (minimal file-based coherence judge).
 
 > ⚠️ If you use the upstream example config today: `extra_compute_modules: cuda/12.6` combined
 > with unpinned `vllm>=0.4.0` resolves to a ≥ 0.22 wheelhouse wheel and hits exactly the PTX bug
