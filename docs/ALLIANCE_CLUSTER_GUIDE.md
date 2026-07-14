@@ -183,6 +183,29 @@ otherwise burns the whole walltime.
 
 ---
 
+### 2.4 MoE vs. dense — MoE is the risky axis, and not because of the flag
+
+Mechanically, MoE is one switch: `--enable-expert-parallel` alongside DP (dense models simply
+omit it). The parts that actually bite:
+
+- **Sizing:** ALL experts are resident in HBM — size by total checkpoint bytes (what
+  `estimate-gpus.py` reads), never by "active parameters". A 1T-param MoE with 32B active
+  still needs the full 523 GB in GPU memory.
+- **Quantized MoE is where garbage output lives.** With quantized checkpoints
+  (compressed-tensors W4A16 etc.), *every expert GEMM* routes through the Marlin kernel
+  family, and upstream issues document numerically-wrong MoE output behind a perfectly green
+  endpoint (vllm#40357 degenerate repetition with clean kernel inputs; vllm#35718
+  coherent-then-garbage after hours). The coherence canary and the periodic sentinel are
+  non-negotiable for quantized MoE; for dense models they're cheap insurance.
+- **There is no user-facing kernel escape in vLLM** for compressed-tensors MoE:
+  `VLLM_DISABLED_KERNELS` gates dense linear layers only, and `--quantization moe_wna16`
+  wraps GPTQ/AWQ formats only. If you need to force the MoE path off Marlin, SGLang is the
+  engine with the lever (`--moe-runner-backend triton`).
+- **Topology fallback:** our proven shape is TP=GPUs-per-node × DP + EP (staff-endorsed).
+  The official vLLM K2 recipe uses pure DP+EP with TP=1 — if a quantized MoE serves garbage
+  and the module contract checks out, that permutation is the documented-good discriminator
+  to try (upstream has TP-sharding bug reports specific to quantized MoE weight scales).
+
 ## 3. Per-model parameterization checklist (never hardcode these)
 
 - **GPU sizing:** read the *actual checkpoint* (file sizes + config precision), don't apply a

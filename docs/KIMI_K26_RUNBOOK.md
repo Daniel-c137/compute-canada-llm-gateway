@@ -140,7 +140,7 @@ python3 scripts/diagnostics/canary-battery.py \
 | Hangs mid-generation at ~5 min from a Node client | undici 300 s headers wall — switch to `node:http(s)` |
 | Job zombie-holds after engine death | The health-wait's fatal-signature grep should abort it; if you see a new fatal string, add it to `FATAL` in the sbatch |
 
-## 9. Adapting to another model — the four questions a new profile must answer
+## 9. Adapting to another model — the five questions a new profile must answer
 
 Copy `profiles/kimi-k2.6.env` (proven) or `profiles/qwen3-32b.example.env` (dense/single-node
 shape, untested) and answer:
@@ -152,12 +152,17 @@ shape, untested) and answer:
    precision comes from `quantization_config`, not assumptions. Single-node result → submit
    with `--nodes=1` (TP only, DP machinery idle); multi-node → TP=GPUs-per-node × DP=nodes,
    `ENABLE_EXPERT_PARALLEL=1` if MoE.
-3. **Agentic or not?** Agentic: set `TOOL_CALL_PARSER` (per-model — `kimi_k2`, `hermes`, ...;
+3. **MoE or dense?** `ENABLE_EXPERT_PARALLEL=1` for MoE (the estimator detects expert keys
+   and says so), `0` for dense. Size by *total* checkpoint bytes, never active params — all
+   experts live in HBM. Quantized MoE is the highest-risk combination for silently-garbage
+   output (guide §2.4): treat the coherence canary + sentinel as mandatory, and know the
+   TP=1 pure-DP+EP recipe shape is the fallback discriminator if output is wrong.
+4. **Agentic or not?** Agentic: set `TOOL_CALL_PARSER` (per-model — `kimi_k2`, `hermes`, ...;
    probe `vllm serve --help` in-job), `ENABLE_AUTO_TOOL_CHOICE=1`, `CANARY_TOOLS=1` so the
    battery gates on tool-call + turn-2 roundtrip. Non-agentic: empty `TOOL_CALL_PARSER`,
    `CANARY_TOOLS=0` — no parser flags are passed and the canary skips tool phases; coherence
    still gates.
-4. **Thinking-by-default?** Set `CHAT_TEMPLATE_KWARGS` with the *model's* kwarg key
+5. **Thinking-by-default?** Set `CHAT_TEMPLATE_KWARGS` with the *model's* kwarg key
    (`{"thinking": false}` for Kimi, `{"enable_thinking": false}` for Qwen3-class) or leave
    empty. Empty `content` with text in `reasoning_content` is the symptom of getting this
    wrong.
