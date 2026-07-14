@@ -49,6 +49,27 @@ flowchart LR
 
 ---
 
+## In this fork: Alliance field guide for multi-node & agentic serving
+
+This fork adds field-tested documentation beyond the single-node gateway flow, from bringing a
+523 GB MoE model (Kimi-K2.6) to a coherent, tool-calling endpoint on 3 nodes × 4×H100 (Rorqual):
+
+- **[docs/ALLIANCE_CLUSTER_GUIDE.md](docs/ALLIANCE_CLUSTER_GUIDE.md)** — the undocumented
+  wheel ↔ cuda-module contract (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` on wheelhouse vLLM ≥ 0.22),
+  multi-node TP×DP+EP topology, canary-before-traffic doctrine, agentic-client failure modes,
+  and SLURM scheduling tactics. Starts with an honest proven-vs-untested inventory.
+- **[docs/ALLIANCE_WIKI_NOTE_DRAFT.md](docs/ALLIANCE_WIKI_NOTE_DRAFT.md)** — draft Alliance wiki
+  note for the cuda/13 module contract (support ticket #0317340).
+- **[scripts/diagnostics/](scripts/diagnostics/)** — `ptx_jit_repro.py` (30-second, 1-GPU,
+  stdlib-only wheel↔driver compatibility preflight) and `judge-canary.py` (endpoint coherence
+  check — a green `/health` is not health).
+
+> ⚠️ If you use the upstream example config today: `extra_compute_modules: cuda/12.6` combined
+> with unpinned `vllm>=0.4.0` resolves to a ≥ 0.22 wheelhouse wheel and hits exactly the PTX bug
+> above. See guide §1.1 for the one-line fix (`module load cuda/13`).
+
+---
+
 ## Requirements
 
 - Python **3.10+**, **SSH** to the login node (see [SSH + Duo](#ssh-and-duo-mfa)).
